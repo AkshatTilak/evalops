@@ -16,7 +16,8 @@ async def init_app_state(app: FastAPI, settings) -> None:
     """Initialize SQL schemas for EvalOps."""
     try:
         engine = get_engine()
-        Base.metadata.create_all(bind=engine)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
         logger.info("EvalOps database tables verified/created successfully.")
     except Exception as e:
         logger.error("Failed to initialize EvalOps database: %s", e)

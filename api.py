@@ -6,38 +6,28 @@ Provides evaluation dashboards and benchmark result endpoints.
 
 import json
 import logging
-from typing import Dict
-from fastapi import APIRouter, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from projects.evalops.src.database.client import get_db
+from common.clients.postgres import get_async_db
 from projects.evalops.src.database.models import EvalOpsReport
 
 router = APIRouter(tags=["evalops"])
 logger = logging.getLogger("evalops.api")
 
 
-def get_latest_report(report_type: str, db: Session) -> dict:
+async def get_latest_report(report_type: str, db: AsyncSession) -> dict:
     """Helper to query the latest report for a given category."""
     try:
-        row = (
-            db.query(EvalOpsReport)
-            .filter(EvalOpsReport.report_type == report_type)
-            .order_index(EvalOpsReport.id.desc())  # SQLAlchemy query: order_by
-            .first()
-        )
-        # Note: we will use order_by, not order_index. Let's fix that.
-    except Exception:
-        # Correct syntax below
-        pass
-        
-    try:
-        row = (
-            db.query(EvalOpsReport)
+        stmt = (
+            select(EvalOpsReport)
             .filter(EvalOpsReport.report_type == report_type)
             .order_by(EvalOpsReport.id.desc())
-            .first()
+            .limit(1)
         )
+        result = await db.execute(stmt)
+        row = result.scalar_one_or_none()
         if row:
             return {
                 "id": row.id,
@@ -101,16 +91,15 @@ async def evalops_status() -> dict:
 
 
 @router.get("/dashboard")
-async def eval_dashboard() -> dict:
+async def eval_dashboard(db: AsyncSession = Depends(get_async_db)) -> dict:
     """Evaluation results dashboard.
 
     Serves latest evaluation reports (RAGAS scores, DeepEval results,
     benchmark metrics) from the database.
     """
-    db = next(get_db())
-    routing_rep = get_latest_report("routing", db)
-    retrieval_rep = get_latest_report("retrieval", db)
-    safety_rep = get_latest_report("safety", db)
+    routing_rep = await get_latest_report("routing", db)
+    retrieval_rep = await get_latest_report("retrieval", db)
+    safety_rep = await get_latest_report("safety", db)
     
     return {
         "status": "active",
@@ -123,21 +112,18 @@ async def eval_dashboard() -> dict:
 
 
 @router.get("/reports/retrieval")
-async def retrieval_report() -> dict:
+async def retrieval_report(db: AsyncSession = Depends(get_async_db)) -> dict:
     """Latest SyntraFlow retrieval evaluation report."""
-    db = next(get_db())
-    return get_latest_report("retrieval", db)
+    return await get_latest_report("retrieval", db)
 
 
 @router.get("/reports/routing")
-async def routing_report() -> dict:
+async def routing_report(db: AsyncSession = Depends(get_async_db)) -> dict:
     """Latest GuardRoute classifier and routing benchmark report."""
-    db = next(get_db())
-    return get_latest_report("routing", db)
+    return await get_latest_report("routing", db)
 
 
 @router.get("/reports/safety")
-async def safety_report() -> dict:
+async def safety_report(db: AsyncSession = Depends(get_async_db)) -> dict:
     """Latest safety and red-teaming evaluation report."""
-    db = next(get_db())
-    return get_latest_report("safety", db)
+    return await get_latest_report("safety", db)

@@ -1,7 +1,6 @@
 """DeepEval Safety Assertions and RAGAS Retrieval Quality evaluation test suite."""
 
 import os
-import pytest
 from deepeval import assert_test
 from deepeval.metrics import HallucinationMetric, ToxicityMetric
 from deepeval.test_case import LLMTestCase
@@ -52,7 +51,6 @@ def test_safety_hallucination_assertion() -> None:
 
 def test_ragas_retrieval_metrics() -> None:
     """Validates retrieved document context recall and precision thresholds (RAGAS approximation)."""
-    query = "Find crude oil spot rates"
     retrieved_context = [
         "Crude Oil (WTI) is currently trading at $75.40/bbl, showing a 1.2% daily increase."
     ]

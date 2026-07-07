@@ -14,7 +14,6 @@ import sys
 # Ensure parent monorepo directories are in Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 
-from common.config.settings import settings
 from common.clients.postgres import get_sessionmaker
 from projects.guardroute.src.orchestrator import execute_orchestrator
 from projects.evalops.src.database.models import EvalOpsReport
@@ -90,14 +89,13 @@ async def run_benchmark():
     # Write report to PostgreSQL
     try:
         SessionLocal = get_sessionmaker()
-        db = SessionLocal()
-        report = EvalOpsReport(
-            report_type="retrieval",  # Used to populate retrieval quality stats on dashboard
-            metrics_json=json.dumps(metrics)
-        )
-        db.add(report)
-        db.commit()
-        db.close()
+        async with SessionLocal() as db:
+            report = EvalOpsReport(
+                report_type="retrieval",  # Used to populate retrieval quality stats on dashboard
+                metrics_json=json.dumps(metrics)
+            )
+            db.add(report)
+            await db.commit()
         logger.info("MMLU report successfully saved to PostgreSQL database.")
     except Exception as e:
         logger.error("Failed to write report to DB: %s", e)

@@ -64,13 +64,13 @@ async def run_benchmark():
     
     start_time = time.time()
     logger.info("Triggering first request (Cold Start)...")
-    res1 = await client.classify(TEST_DATA[0]["prompt"])
+    await client.classify(TEST_DATA[0]["prompt"])
     cold_latency = (time.time() - start_time) * 1000
     logger.info("Cold Start completed: %.2f ms", cold_latency)
     
     # Subsequent request (Warm Start)
     start_time = time.time()
-    res2 = await client.classify(TEST_DATA[0]["prompt"])
+    await client.classify(TEST_DATA[0]["prompt"])
     warm_latency = (time.time() - start_time) * 1000
     logger.info("Warm Start completed: %.2f ms", warm_latency)
     
@@ -123,14 +123,13 @@ async def run_benchmark():
     # 3. Save report to SQL database
     try:
         SessionLocal = get_sessionmaker()
-        db = SessionLocal()
-        report = EvalOpsReport(
-            report_type="routing",
-            metrics_json=json.dumps(metrics)
-        )
-        db.add(report)
-        db.commit()
-        db.close()
+        async with SessionLocal() as db:
+            report = EvalOpsReport(
+                report_type="routing",
+                metrics_json=json.dumps(metrics)
+            )
+            db.add(report)
+            await db.commit()
         logger.info("Benchmark report successfully saved to PostgreSQL database.")
     except Exception as e:
         logger.error("Failed to write report to DB: %s", e)
