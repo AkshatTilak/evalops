@@ -109,3 +109,66 @@ async def test_inference_client_circuit_breaker(mocker):
     # Next attempt should be blocked immediately by circuit breaker
     with pytest.raises(RuntimeError, match="degraded"):
         await client.classify("another prompt")
+
+
+def test_logger_level_and_formatters(mocker):
+    """Test standard and JSON logging formatters and setting log levels."""
+    import logging
+    import json
+    from common.config.settings import settings
+    from common.observability.logger import get_logger, request_id_var, RequestIdFormatter, JSONFormatter
+    
+    # Check default log level resolution
+    logger = get_logger("test-logger")
+    assert logger.level == getattr(logging, settings.LOG_LEVEL.upper())
+    
+    # Mock contextvar request_id
+    token = request_id_var.set("test-1234-uuid")
+    try:
+        # Test RequestIdFormatter
+        formatter = RequestIdFormatter(fmt="%(request_id)s | %(message)s")
+        record = logging.LogRecord("test-logger", logging.INFO, "path", 10, "hello", (), None)
+        formatted = formatter.format(record)
+        assert "test-1234-uuid | hello" in formatted
+        
+        # Test JSONFormatter
+        json_formatter = JSONFormatter(datefmt="%Y-%m-%d")
+        formatted_json = json_formatter.format(record)
+        log_data = json.loads(formatted_json)
+        assert log_data["message"] == "hello"
+        assert log_data["request_id"] == "test-1234-uuid"
+        assert log_data["level"] == "INFO"
+    finally:
+        request_id_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_request_id_middleware():
+    """Test RequestIdMiddleware generates or propagates request IDs."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from common.observability.logger import RequestIdMiddleware, request_id_var
+    
+    app = FastAPI()
+    app.add_middleware(RequestIdMiddleware)
+    
+    @app.get("/test-route")
+    async def test_route():
+        # Read request ID inside request context to verify propagation
+        return {"current_request_id": request_id_var.get()}
+        
+    client = TestClient(app)
+    
+    # 1. Without header (should generate new request ID)
+    response = client.get("/test-route")
+    assert response.status_code == 200
+    assert "X-Request-ID" in response.headers
+    generated_id = response.headers["X-Request-ID"]
+    assert response.json()["current_request_id"] == generated_id
+    
+    # 2. With header (should propagate provided request ID)
+    custom_id = "custom-test-id-999"
+    response = client.get("/test-route", headers={"X-Request-ID": custom_id})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == custom_id
+    assert response.json()["current_request_id"] == custom_id
