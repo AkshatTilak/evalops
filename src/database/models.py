@@ -1,10 +1,14 @@
-"""SQLAlchemy database models for EvalOps benchmark and quality reports."""
+"""SQLAlchemy database models for EvalOps benchmark and quality reports.
+
+All models use the shared Base from common.models.database for unified
+Alembic migration support across the monorepo.
+"""
 
 from datetime import datetime
-from sqlalchemy import Column, DateTime, Integer, String, Text
-from sqlalchemy.orm import declarative_base
 
-Base = declarative_base()
+from sqlalchemy import Column, DateTime, Integer, String, Text
+
+from common.models.database import Base
 
 
 class EvalOpsReport(Base):
