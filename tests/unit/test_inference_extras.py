@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from common.schemas import HealthResponse, ErrorResponse, PaginatedResponse, SubAgentResult
 from inference.core.vram_manager import VRAMManager
@@ -146,3 +146,75 @@ def test_schema_modifications():
     )
     assert len(pr.items) == 2
     assert pr.pages == 5
+
+
+@pytest.mark.asyncio
+async def test_downloader_offline_and_cache(tmp_path, monkeypatch):
+    """Verify downloader behavior under offline mode and cache directory configurations."""
+    from inference.core.downloader import download_model_from_hub
+
+    # Create dummy local cache path
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    monkeypatch.setenv("MODEL_CACHE_DIR", str(cache_dir))
+
+    # 1. Local directory check: should return immediately if path exists
+    local_dir = tmp_path / "my_local_model"
+    local_dir.mkdir()
+    result = download_model_from_hub(str(local_dir))
+    assert result == str(local_dir)
+
+    # 2. Offline check when model is not cached
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    with pytest.raises(RuntimeError, match="Offline mode.*is active but model.*is not cached"):
+        download_model_from_hub("some-org/non-existent-model")
+
+    # 3. Offline check when model IS cached
+    cached_model_name = "some-org/my-model"
+    repo_folder = "models--" + cached_model_name.replace("/", "--")
+    cached_path = cache_dir / repo_folder
+    cached_path.mkdir()
+
+    result_cached = download_model_from_hub(cached_model_name)
+    assert result_cached == str(cached_path)
+
+
+@pytest.mark.asyncio
+async def test_loader_device_mapping_and_quantization(monkeypatch):
+    """Verify that loaders handle device auto-detection, CUDA forcing, and quantization compatibility."""
+    from inference.models.classifier import load_classifier
+    from inference.models.sensevoice import load_sensevoice
+    from common.config.settings import settings
+
+    # Force CPU mode
+    monkeypatch.setattr(settings, "DEVICE", "cpu")
+    cls_model = await load_classifier()
+    assert cls_model.device == "cpu"
+
+    # Force CUDA - should fail if CUDA not available in test env
+    monkeypatch.setattr(settings, "DEVICE", "cuda")
+    import torch
+    if not torch.cuda.is_available():
+        with pytest.raises(ValueError, match="CUDA is forced.*but not available"):
+            await load_classifier()
+
+    # Reset to CPU before running other validations
+    monkeypatch.setattr(settings, "DEVICE", "cpu")
+
+    # Verify incompatible quantization check (mocking get_active_model to return a spec with bad quantization)
+    from common.schemas.model_registry import ModelSpec
+    mock_spec = ModelSpec(
+        id=1,
+        role="asr",
+        mode="local",
+        provider="funasr",
+        model_id="FunAudioLLM/SenseVoiceSmall",
+        display_name="SenseVoice",
+        quantization="unsupported_quant_format",
+        framework="funasr"
+    )
+
+    with patch("inference.models.sensevoice.get_active_model", return_value=mock_spec):
+        with pytest.raises(ValueError, match="Incompatible quantization level"):
+            await load_sensevoice()
+
