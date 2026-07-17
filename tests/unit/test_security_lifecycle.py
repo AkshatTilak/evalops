@@ -252,3 +252,47 @@ def test_docker_compose_network_isolation():
         
         assert "contained_net" in info["networks"], f"Service {name} is not connected to contained_net!"
 
+
+@pytest.mark.asyncio
+async def test_postgres_engine_close(mocker):
+    """Ensure close_postgres disposes the async engine and resets the engine singleton."""
+    from common.clients.postgres import close_postgres
+    import common.clients.postgres as pg_module
+    
+    # Mock engine
+    mock_engine = AsyncMock()
+    pg_module._engine = mock_engine
+    
+    await close_postgres()
+    
+    mock_engine.dispose.assert_called_once()
+    assert pg_module._engine is None
+
+
+def test_inference_server_error_mapping():
+    """Ensure that InferenceServerError triggers a 503 HTTP response from the gateway."""
+    from gateway.main import app
+    from common.clients.inference import InferenceServerError, InferenceClient
+    
+    app.state.guardroute_inference = InferenceClient(base_url="http://mock")
+    client = TestClient(app)
+    
+    with patch("projects.guardroute.api.run_classification", side_effect=InferenceServerError("Mock server offline")):
+        with patch("gateway.api.verify_api_key", return_value=None):
+            resp = client.post("/api/guardroute/classify", json={"prompt": "test prompt"})
+            assert resp.status_code == 503
+            assert "offline" in resp.json()["detail"]
+
+
+def test_limiter_redis_fallback(mocker):
+    """Ensure limiter falls back to memory:// if Redis is unreachable on startup."""
+    import redis
+    mocker.patch("redis.from_url", side_effect=redis.ConnectionError("Redis down"))
+    
+    import importlib
+    import common.observability.limiter as limiter_mod
+    importlib.reload(limiter_mod)
+    
+    assert limiter_mod.storage_uri == "memory://"
+
+
