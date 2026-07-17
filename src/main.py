@@ -17,6 +17,9 @@ setup_logging(settings.app_env)
 logger.info("Initializing EvalOps application in env: %s", settings.app_env)
 
 # 2. Initialize FastAPI app
+from common.observability.tracing import setup_tracing
+setup_tracing("evalops")
+
 app = FastAPI(
     title="EvalOps Continuous AI Evaluation & Observability Harness",
     description="Evaluation Gate, Router Gateway Benchmarking, and Diagnostic Suite.",

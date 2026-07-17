@@ -24,34 +24,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("evalops.bench_gguf")
 
 
-# Eval dataset of queries and expected complexities/required agents
-TEST_DATA = [
-    {
-        "prompt": "Hello there, how are you today?",
-        "expected_complexity": "simple",
-        "expected_agents": []
-    },
-    {
-        "prompt": "Find and retrieve document chunks relating to Q3 shipping logs.",
-        "expected_complexity": "medium",
-        "expected_agents": ["retrieval"]
-    },
-    {
-        "prompt": "Write a python script that connects to Neo4j and queries all user logs.",
-        "expected_complexity": "complex",
-        "expected_agents": ["retrieval", "coding", "web_search"]
-    },
-    {
-        "prompt": "Calculate the average commodity index for Copper using python.",
-        "expected_complexity": "complex",
-        "expected_agents": ["retrieval", "coding", "web_search"]
-    },
-    {
-        "prompt": "Search the web for crude oil spot rates.",
-        "expected_complexity": "medium",
-        "expected_agents": ["retrieval"]  # mapped to retrieval / search
-    }
-]
+# Load dataset from fixture file
+FIXTURE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../tests/fixtures/grpo_eval_data.json"))
+try:
+    with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
+        TEST_DATA = json.load(f)
+    logger.info("Loaded %d evaluation samples from fixtures file.", len(TEST_DATA))
+except Exception as e:
+    logger.warning("Could not load fixtures from %s. Using fallback baseline test data. Error: %s", FIXTURE_PATH, e)
+    TEST_DATA = [
+        {
+            "prompt": "Hello there, how are you today?",
+            "expected_complexity": "simple",
+            "expected_agents": []
+        }
+    ]
 
 
 async def run_benchmark():
