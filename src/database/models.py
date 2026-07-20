@@ -8,7 +8,7 @@ from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
 
-from common.models.database import Base
+from common.models.database import Base, EvalTestSuite, EvalTestCase, EvalRunHistory
 
 
 class EvalOpsReport(Base):
@@ -20,3 +20,6 @@ class EvalOpsReport(Base):
     report_type = Column(String(50), nullable=False)  # 'retrieval', 'routing', 'safety'
     metrics_json = Column(Text, nullable=False)       # JSON string containing evaluation metrics
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+__all__ = ["Base", "EvalOpsReport", "EvalTestSuite", "EvalTestCase", "EvalRunHistory"]
