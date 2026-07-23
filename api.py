@@ -131,13 +131,17 @@ async def safety_report(db: AsyncSession = Depends(get_async_db)) -> dict:
 
 # --- V2 Synthetic Test Dataset Generation & Async Eval Runner Endpoints ---
 
-from pydantic import BaseModel
-from typing import Optional
+# --- V2 Synthetic Test Dataset Generation, Dataset CRUD & Async Eval Runner Endpoints ---
+
+from typing import Dict, List, Optional
 import uuid
-from fastapi import BackgroundTasks
-from common.models.database import EvalRunHistory, EvalTestSuite, EvalTestCase
+from fastapi import BackgroundTasks, HTTPException, UploadFile, File, Form, status
+from pydantic import BaseModel, Field
+
+from common.models.database import EvalRunHistory, EvalTestSuite, EvalTestCase, EvalMetricResult
 from projects.evalops.src.generation.synthetic import generate_synthetic_test_cases
 from projects.evalops.src.runner.consumer import publish_eval_trigger_event, process_agent_eval_run
+from projects.evalops.src.datasets import manager as dataset_mgr
 
 
 class SyntheticGenRequest(BaseModel):
@@ -151,6 +155,226 @@ class SyntheticGenRequest(BaseModel):
 class EvalRunRequest(BaseModel):
     agent_id: str
     suite_id: Optional[str] = None
+    framework: Optional[str] = Field(default="both", description="ragas | deepeval | both")
+    metrics: Optional[List[str]] = Field(default=None, description="Optional metric subset list")
+    thresholds: Optional[Dict[str, float]] = Field(default=None, description="Per-metric pass thresholds")
+
+
+class SuiteCreateRequest(BaseModel):
+    agent_id: str
+    name: str
+    description: Optional[str] = None
+
+
+class SuiteUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class TestCaseCreateRequest(BaseModel):
+    input_query: str
+    expected_output: Optional[str] = None
+    expected_context: Optional[str] = None
+
+
+class TestCaseUpdateRequest(BaseModel):
+    input_query: Optional[str] = None
+    expected_output: Optional[str] = None
+    expected_context: Optional[str] = None
+
+
+# --- Suite & Test Case REST Endpoints (S5-01c) ---
+
+
+@router.post("/suites", status_code=status.HTTP_201_CREATED)
+async def create_eval_suite(
+    payload: SuiteCreateRequest, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Create a new evaluation test suite."""
+    suite = await dataset_mgr.create_suite(
+        db, agent_id=payload.agent_id, name=payload.name, description=payload.description
+    )
+    return {"status": "success", "suite_id": suite.id, "name": suite.name}
+
+
+@router.get("/suites")
+async def list_eval_suites(
+    agent_id: Optional[str] = None, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """List evaluation test suites, optionally filtered by agent_id."""
+    suites = await dataset_mgr.list_suites(db, agent_id=agent_id)
+    return {
+        "count": len(suites),
+        "suites": [
+            {
+                "id": s.id,
+                "agent_id": s.agent_id,
+                "name": s.name,
+                "description": s.description,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in suites
+        ],
+    }
+
+
+@router.get("/suites/{suite_id}")
+async def get_eval_suite(
+    suite_id: str, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Get details for a test suite."""
+    suite = await dataset_mgr.get_suite(db, suite_id)
+    if not suite:
+        raise HTTPException(status_code=404, detail=f"Suite '{suite_id}' not found.")
+    cases = await dataset_mgr.list_test_cases(db, suite_id)
+    return {
+        "id": suite.id,
+        "agent_id": suite.agent_id,
+        "name": suite.name,
+        "description": suite.description,
+        "case_count": len(cases),
+        "test_cases": [
+            {
+                "id": c.id,
+                "input_query": c.input_query,
+                "expected_output": c.expected_output,
+                "expected_context": c.expected_context,
+            }
+            for c in cases
+        ],
+    }
+
+
+@router.put("/suites/{suite_id}")
+async def update_eval_suite(
+    suite_id: str, payload: SuiteUpdateRequest, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Update metadata for an evaluation test suite."""
+    suite = await dataset_mgr.update_suite(
+        db, suite_id, name=payload.name, description=payload.description
+    )
+    if not suite:
+        raise HTTPException(status_code=404, detail=f"Suite '{suite_id}' not found.")
+    return {"status": "success", "id": suite.id, "name": suite.name}
+
+
+@router.delete("/suites/{suite_id}")
+async def delete_eval_suite(
+    suite_id: str, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Delete a test suite and its test cases."""
+    success = await dataset_mgr.delete_suite(db, suite_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Suite '{suite_id}' not found.")
+    return {"status": "success", "id": suite_id}
+
+
+@router.post("/suites/{suite_id}/clone")
+async def clone_eval_suite(
+    suite_id: str, new_name: Optional[str] = None, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Clone an existing test suite."""
+    cloned = await dataset_mgr.clone_suite(db, suite_id, new_name)
+    if not cloned:
+        raise HTTPException(status_code=404, detail=f"Suite '{suite_id}' not found.")
+    return {"status": "success", "cloned_suite_id": cloned.id, "name": cloned.name}
+
+
+@router.post("/suites/{suite_id}/cases", status_code=status.HTTP_201_CREATED)
+async def add_test_case_to_suite(
+    suite_id: str, payload: TestCaseCreateRequest, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Add a single test case to a suite."""
+    case = await dataset_mgr.add_test_case(
+        db,
+        suite_id=suite_id,
+        input_query=payload.input_query,
+        expected_output=payload.expected_output,
+        expected_context=payload.expected_context,
+    )
+    return {"status": "success", "case_id": case.id}
+
+
+@router.get("/suites/{suite_id}/cases")
+async def list_cases_in_suite(
+    suite_id: str, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """List test cases in a specified suite."""
+    cases = await dataset_mgr.list_test_cases(db, suite_id)
+    return {
+        "suite_id": suite_id,
+        "count": len(cases),
+        "cases": [
+            {
+                "id": c.id,
+                "input_query": c.input_query,
+                "expected_output": c.expected_output,
+                "expected_context": c.expected_context,
+            }
+            for c in cases
+        ],
+    }
+
+
+@router.put("/cases/{case_id}")
+async def update_single_test_case(
+    case_id: str, payload: TestCaseUpdateRequest, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Update a specific test case."""
+    case = await dataset_mgr.update_test_case(
+        db,
+        case_id,
+        input_query=payload.input_query,
+        expected_output=payload.expected_output,
+        expected_context=payload.expected_context,
+    )
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Test case '{case_id}' not found.")
+    return {"status": "success", "id": case.id}
+
+
+@router.delete("/cases/{case_id}")
+async def delete_single_test_case(
+    case_id: str, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Delete a specific test case."""
+    success = await dataset_mgr.delete_test_case(db, case_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Test case '{case_id}' not found.")
+    return {"status": "success", "id": case_id}
+
+
+@router.post("/suites/{suite_id}/import")
+async def import_suite_cases(
+    suite_id: str,
+    file: Optional[UploadFile] = File(None),
+    json_body: Optional[List[Dict]] = None,
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    """Bulk import test cases from CSV upload or JSON payload."""
+    if file:
+        content = (await file.read()).decode("utf-8")
+        imported = await dataset_mgr.import_cases_from_csv(db, suite_id, content)
+    elif json_body:
+        imported = await dataset_mgr.import_cases_from_json(db, suite_id, json_body)
+    else:
+        raise HTTPException(status_code=400, detail="Provide CSV file upload or JSON body payload.")
+
+    return {"status": "success", "suite_id": suite_id, "cases_imported": imported}
+
+
+@router.get("/suites/{suite_id}/export")
+async def export_suite_cases(
+    suite_id: str, db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Export suite metadata and test cases as JSON."""
+    try:
+        return await dataset_mgr.export_suite_to_json(db, suite_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# --- Synthetic Generation & Enhanced Run Orchestration ---
 
 
 @router.post("/generate")
@@ -182,6 +406,7 @@ async def trigger_eval_run(
         id=run_id,
         agent_id=payload.agent_id,
         suite_id=payload.suite_id,
+        framework_used=payload.framework or "both",
         run_status="pending"
     )
     db.add(run_record)
@@ -190,11 +415,13 @@ async def trigger_eval_run(
     published = publish_eval_trigger_event(
         agent_id=payload.agent_id,
         run_id=run_id,
-        suite_id=payload.suite_id
+        suite_id=payload.suite_id,
+        framework=payload.framework,
+        metrics=payload.metrics,
+        thresholds=payload.thresholds,
     )
 
     if not published:
-        # Kafka offline -> execute directly via FastAPI BackgroundTasks
         logger.info(f"Kafka unavailable. Scheduling evaluation run {run_id} as background task.")
         background_tasks.add_task(
             process_agent_eval_run,
@@ -202,7 +429,10 @@ async def trigger_eval_run(
                 "event": "agent_eval_trigger",
                 "agent_id": payload.agent_id,
                 "run_id": run_id,
-                "suite_id": payload.suite_id
+                "suite_id": payload.suite_id,
+                "framework": payload.framework or "both",
+                "metrics": payload.metrics,
+                "thresholds": payload.thresholds,
             }
         )
 
@@ -210,6 +440,7 @@ async def trigger_eval_run(
         "status": "initiated",
         "run_id": run_id,
         "agent_id": payload.agent_id,
+        "framework": payload.framework or "both",
         "mode": "kafka" if published else "background"
     }
 
@@ -234,8 +465,17 @@ async def list_agent_eval_runs(
             {
                 "id": r.id,
                 "suite_id": r.suite_id,
+                "framework_used": r.framework_used,
                 "faithfulness_score": r.faithfulness_score,
                 "relevance_score": r.relevance_score,
+                "recall_score": r.recall_score,
+                "precision_score": r.precision_score,
+                "hallucination_score": r.hallucination_score,
+                "toxicity_score": r.toxicity_score,
+                "bias_score": r.bias_score,
+                "total_test_cases": r.total_test_cases,
+                "passed_count": r.passed_count,
+                "failed_count": r.failed_count,
                 "duration_sec": r.duration_sec,
                 "run_status": r.run_status,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -243,6 +483,36 @@ async def list_agent_eval_runs(
             }
             for r in runs
         ]
+    }
+
+
+@router.get("/runs/detail/{run_id}/metrics")
+async def get_run_metric_breakdown(
+    run_id: str,
+    db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Retrieve granular per-test-case, per-metric results for an evaluation run (S5-01d)."""
+    stmt = select(EvalMetricResult).filter(EvalMetricResult.run_id == run_id).order_by(EvalMetricResult.created_at.asc())
+    res = await db.execute(stmt)
+    metric_results = res.scalars().all()
+
+    return {
+        "run_id": run_id,
+        "count": len(metric_results),
+        "metric_results": [
+            {
+                "id": mr.id,
+                "test_case_id": mr.test_case_id,
+                "metric_name": mr.metric_name,
+                "metric_score": mr.metric_score,
+                "metric_reason": mr.metric_reason,
+                "framework": mr.framework,
+                "threshold": mr.threshold,
+                "passed": mr.passed,
+                "created_at": mr.created_at.isoformat() if mr.created_at else None,
+            }
+            for mr in metric_results
+        ],
     }
 
 
@@ -279,4 +549,5 @@ async def list_agent_test_cases(
             for c in cases
         ]
     }
+
 

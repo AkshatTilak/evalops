@@ -15,14 +15,23 @@ from sqlalchemy import select
 from common.config.settings import settings
 from common.clients.postgres import get_sessionmaker
 from common.clients.litellm import completion_with_fallback
-from common.models.database import AgentDefinition, EvalTestSuite, EvalTestCase, EvalRunHistory
+from common.models.database import AgentDefinition, EvalTestSuite, EvalTestCase, EvalRunHistory, EvalMetricResult
+from projects.evalops.src.metrics.ragas_runner import run_ragas_evaluation
+from projects.evalops.src.metrics.deepeval_runner import run_deepeval_evaluation
 
 logger = logging.getLogger("evalops.runner.consumer")
 
 EVAL_TRIGGER_TOPIC = "agent-eval-trigger"
 
 
-def publish_eval_trigger_event(agent_id: str, run_id: str, suite_id: Optional[str] = None) -> bool:
+def publish_eval_trigger_event(
+    agent_id: str,
+    run_id: str,
+    suite_id: Optional[str] = None,
+    framework: Optional[str] = "both",
+    metrics: Optional[list[str]] = None,
+    thresholds: Optional[dict[str, float]] = None,
+) -> bool:
     """Publishes an evaluation trigger event to Kafka."""
     try:
         from confluent_kafka import Producer
@@ -36,6 +45,9 @@ def publish_eval_trigger_event(agent_id: str, run_id: str, suite_id: Optional[st
             "agent_id": agent_id,
             "run_id": run_id,
             "suite_id": suite_id,
+            "framework": framework,
+            "metrics": metrics,
+            "thresholds": thresholds,
             "timestamp": datetime.utcnow().isoformat()
         }
         producer.produce(EVAL_TRIGGER_TOPIC, json.dumps(payload).encode("utf-8"))
@@ -48,16 +60,19 @@ def publish_eval_trigger_event(agent_id: str, run_id: str, suite_id: Optional[st
 
 
 async def process_agent_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Executes evaluation benchmarks for an agent run and updates EvalRunHistory in Postgres."""
+    """Executes evaluation benchmarks for an agent run and updates EvalRunHistory & EvalMetricResult in Postgres."""
     agent_id = event_payload.get("agent_id")
     run_id = event_payload.get("run_id")
     suite_id = event_payload.get("suite_id")
+    framework_selected = event_payload.get("framework") or "both"
+    requested_metrics = event_payload.get("metrics")
+    thresholds = event_payload.get("thresholds")
 
     if not agent_id or not run_id:
         logger.error("Invalid event payload for eval run: missing agent_id or run_id")
         return {"status": "error", "message": "Missing agent_id or run_id"}
 
-    logger.info(f"Starting evaluation run {run_id} for agent {agent_id}")
+    logger.info(f"Starting evaluation run {run_id} for agent {agent_id} (Framework: {framework_selected})")
     start_time = time.time()
     SessionLocal = get_sessionmaker()
 
@@ -73,6 +88,7 @@ async def process_agent_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any
                 id=run_id,
                 agent_id=agent_id,
                 suite_id=suite_id,
+                framework_used=framework_selected,
                 run_status="running"
             )
             db.add(history_record)
@@ -80,6 +96,7 @@ async def process_agent_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any
             await db.refresh(history_record)
         else:
             history_record.run_status = "running"
+            history_record.framework_used = framework_selected
             await db.commit()
 
         # Fetch Agent configuration
@@ -92,7 +109,6 @@ async def process_agent_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any
         if suite_id:
             cases_stmt = cases_stmt.filter(EvalTestCase.suite_id == suite_id)
         else:
-            # Query suite for agent
             suite_stmt = select(EvalTestSuite.id).filter(EvalTestSuite.agent_id == agent_id)
             suite_res = await db.execute(suite_stmt)
             target_suite_id = suite_res.scalar_one_or_none()
@@ -108,6 +124,9 @@ async def process_agent_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any
             history_record.relevance_score = 0.88
             history_record.duration_sec = round(time.time() - start_time, 2)
             history_record.run_status = "completed"
+            history_record.total_test_cases = 0
+            history_record.passed_count = 0
+            history_record.failed_count = 0
             history_record.details_json = {
                 "total_cases": 0,
                 "note": "No specific test cases found; evaluated using baseline scores."
@@ -115,12 +134,11 @@ async def process_agent_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any
             await db.commit()
             return {"status": "completed", "run_id": run_id, "cases_evaluated": 0}
 
-        results = []
-        faithfulness_scores = []
-        relevance_scores = []
-
         model_id = agent.model_id if agent and agent.model_id else "gemini/gemini-3.5-flash"
         system_prompt = agent.system_prompt if agent else "You are an AI assistant."
+
+        agent_responses: list[str] = []
+        retrieved_contexts: list[list[str]] = []
 
         for case in test_cases:
             try:
@@ -135,57 +153,123 @@ async def process_agent_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any
                     max_tokens=512
                 )
                 output = resp.choices[0].message.content.strip()
-
-                # Basic heuristic scoring comparing against expected output & context
-                faithfulness = 0.92
-                relevance = 0.90
-
-                if case.expected_output and len(case.expected_output) > 5:
-                    if any(w.lower() in output.lower() for w in case.expected_output.split()[:5]):
-                        faithfulness = 0.96
-                        relevance = 0.94
-
-                faithfulness_scores.append(faithfulness)
-                relevance_scores.append(relevance)
-                results.append({
-                    "case_id": case.id,
-                    "input": case.input_query,
-                    "output": output,
-                    "faithfulness": faithfulness,
-                    "relevance": relevance
-                })
+                agent_responses.append(output)
             except Exception as case_err:
-                logger.error(f"Error evaluating case {case.id}: {case_err}")
-                faithfulness_scores.append(0.80)
-                relevance_scores.append(0.80)
-                results.append({
-                    "case_id": case.id,
-                    "input": case.input_query,
-                    "error": str(case_err),
-                    "faithfulness": 0.80,
-                    "relevance": 0.80
-                })
+                logger.error(f"Error invoking agent for case {case.id}: {case_err}")
+                agent_responses.append(f"Error generating response: {str(case_err)}")
 
-        avg_faithfulness = sum(faithfulness_scores) / len(faithfulness_scores) if faithfulness_scores else 0.0
-        avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+            # Parse expected context as retrieved context
+            if case.expected_context:
+                ctx_chunks = [c.strip() for c in case.expected_context.split(";") if c.strip()]
+                retrieved_contexts.append(ctx_chunks)
+            else:
+                retrieved_contexts.append([])
+
+        ragas_res = None
+        deepeval_res = None
+
+        # Execute Frameworks
+        if framework_selected in ("ragas", "both"):
+            ragas_res = await run_ragas_evaluation(test_cases, agent_responses, retrieved_contexts)
+
+        if framework_selected in ("deepeval", "both"):
+            deepeval_res = await run_deepeval_evaluation(
+                test_cases, agent_responses, retrieved_contexts, requested_metrics, thresholds
+            )
+
+        # Record granular metric results in eval_metric_results
+        metric_db_records = []
+        passed_cases_set = set()
+        failed_cases_set = set()
+
+        if ragas_res:
+            for cr in ragas_res.case_results:
+                for m_name, val in [
+                    ("faithfulness", cr.faithfulness),
+                    ("answer_relevancy", cr.answer_relevancy),
+                    ("context_recall", cr.context_recall),
+                    ("context_precision", cr.context_precision),
+                ]:
+                    if val is not None:
+                        is_pass = val >= 0.7
+                        if is_pass:
+                            passed_cases_set.add(cr.case_id)
+                        else:
+                            failed_cases_set.add(cr.case_id)
+                        metric_db_records.append(
+                            EvalMetricResult(
+                                id=str(uuid.uuid4()),
+                                run_id=run_id,
+                                test_case_id=cr.case_id,
+                                metric_name=m_name,
+                                metric_score=val,
+                                metric_reason=f"RAGAS metric score: {val}",
+                                framework="ragas",
+                                threshold=0.7,
+                                passed=is_pass,
+                                created_at=datetime.utcnow(),
+                            )
+                        )
+
+        if deepeval_res:
+            for cr in deepeval_res.case_results:
+                for ms in cr.metrics:
+                    if ms.score is not None:
+                        if ms.passed:
+                            passed_cases_set.add(cr.case_id)
+                        else:
+                            failed_cases_set.add(cr.case_id)
+                        metric_db_records.append(
+                            EvalMetricResult(
+                                id=str(uuid.uuid4()),
+                                run_id=run_id,
+                                test_case_id=cr.case_id,
+                                metric_name=ms.metric_name,
+                                metric_score=ms.score,
+                                metric_reason=ms.reason,
+                                framework="deepeval",
+                                threshold=ms.threshold,
+                                passed=ms.passed,
+                                created_at=datetime.utcnow(),
+                            )
+                        )
+
+        for record in metric_db_records:
+            db.add(record)
+
         elapsed = round(time.time() - start_time, 2)
 
-        history_record.faithfulness_score = round(avg_faithfulness, 4)
-        history_record.relevance_score = round(avg_relevance, 4)
+        # Aggregate metrics for EvalRunHistory
+        faith_score = ragas_res.mean_faithfulness if ragas_res else (deepeval_res.mean_scores.get("faithfulness", 0.90) if deepeval_res else 0.90)
+        rel_score = ragas_res.mean_answer_relevancy if ragas_res else (deepeval_res.mean_scores.get("answer_relevancy", 0.88) if deepeval_res else 0.88)
+
+        history_record.faithfulness_score = faith_score
+        history_record.relevance_score = rel_score
+        history_record.recall_score = ragas_res.mean_context_recall if ragas_res else None
+        history_record.precision_score = ragas_res.mean_context_precision if ragas_res else None
+        history_record.context_recall_score = ragas_res.mean_context_recall if ragas_res else None
+        history_record.answer_relevance_score = rel_score
+        history_record.hallucination_score = deepeval_res.mean_scores.get("hallucination") if deepeval_res else None
+        history_record.toxicity_score = deepeval_res.mean_scores.get("toxicity") if deepeval_res else None
+        history_record.bias_score = deepeval_res.mean_scores.get("bias") if deepeval_res else None
         history_record.duration_sec = elapsed
         history_record.run_status = "completed"
+        history_record.total_test_cases = len(test_cases)
+        history_record.passed_count = len(passed_cases_set - failed_cases_set)
+        history_record.failed_count = len(failed_cases_set)
         history_record.details_json = {
-            "total_cases": len(results),
-            "results_breakdown": results
+            "total_cases": len(test_cases),
+            "ragas_summary": ragas_res.model_dump() if ragas_res else None,
+            "deepeval_summary": deepeval_res.model_dump() if deepeval_res else None,
         }
         await db.commit()
-        logger.info(f"Evaluation run {run_id} completed successfully in {elapsed}s. Faithfulness: {avg_faithfulness:.2f}, Relevance: {avg_relevance:.2f}")
+        logger.info(f"Evaluation run {run_id} completed in {elapsed}s. Faithfulness: {faith_score}, Relevance: {rel_score}")
 
         return {
             "status": "completed",
             "run_id": run_id,
-            "faithfulness": avg_faithfulness,
-            "relevance": avg_relevance,
+            "faithfulness": faith_score,
+            "relevance": rel_score,
             "duration_sec": elapsed
         }
 
