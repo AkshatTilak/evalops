@@ -8,7 +8,7 @@ from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
 
-from common.models.database import Base, EvalTestSuite, EvalTestCase, EvalRunHistory
+from common.models.database import Base, EvalTestSuite, EvalTestCase, EvalRunHistory, EvalFlowTrace
 
 
 class EvalOpsReport(Base):
@@ -22,4 +22,4 @@ class EvalOpsReport(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-__all__ = ["Base", "EvalOpsReport", "EvalTestSuite", "EvalTestCase", "EvalRunHistory"]
+__all__ = ["Base", "EvalOpsReport", "EvalTestSuite", "EvalTestCase", "EvalRunHistory", "EvalFlowTrace"]

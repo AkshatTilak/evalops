@@ -690,4 +690,42 @@ async def get_dashboard_comparison(
     return {"agents_compared": len(comparison), "comparison": comparison}
 
 
+from common.models.database import EvalFlowTrace
+
+
+@router.get("/runs/{run_id}/traces")
+async def get_run_flow_traces(
+    run_id: str,
+    db: AsyncSession = Depends(get_async_db)
+) -> dict:
+    """Retrieve step-by-step EvalFlowTrace node records for a multi-agent run."""
+    stmt = (
+        select(EvalFlowTrace)
+        .filter(EvalFlowTrace.run_id == run_id)
+        .order_by(EvalFlowTrace.timestamp.asc())
+    )
+    res = await db.execute(stmt)
+    traces = res.scalars().all()
+
+    return {
+        "run_id": run_id,
+        "count": len(traces),
+        "traces": [
+            {
+                "id": t.id,
+                "run_id": t.run_id,
+                "workflow_id": t.workflow_id,
+                "node_id": t.node_id,
+                "node_type": t.node_type,
+                "input_state": t.input_state,
+                "output_state": t.output_state,
+                "latency_ms": t.latency_ms,
+                "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+            }
+            for t in traces
+        ]
+    }
+
+
+
 
