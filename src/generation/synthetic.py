@@ -1,7 +1,7 @@
-"""Synthetic test dataset generator for EvalOps.
+"""Synthetic evaluation test case generator for Eval Hub (S6-07d).
 
-Generates attributed evaluation test cases (EvalTestCase) for an agent based on its
-system prompt, role, and domain context using LiteLLM/Model Registry completions.
+Generates synthetic evaluation test cases for agent or workflow targets, verifying cross-hub links
+and building benchmark datasets based on prompt/node schemas and domain context.
 """
 
 import json
@@ -12,18 +12,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.clients.litellm import completion_with_fallback
-from common.models.database import AgentDefinition, EvalTestSuite, EvalTestCase
+from common.models.database import AgentDefinition, EvalTestCase, EvalTestSuite, WorkflowDefinition
+from common.schemas.evalops import EvalTestCaseCreate
+from common.services import hub_resolver
 
 logger = logging.getLogger("evalops.synthetic")
 
 SYNTHETIC_PROMPT_TEMPLATE = """You are an expert AI Benchmark Engineer.
-Generate {count} diverse, high-quality, realistic test queries for evaluating an AI Agent.
+Generate {count} diverse, high-quality, realistic test queries for evaluating an AI target ({target_type}).
 
-Agent Role: {role}
-Agent System Prompt: {system_prompt}
+Target Name: {target_name}
+Target Context: {target_context}
 
 Generate exactly {count} evaluation test cases. Output ONLY a valid JSON array where each object has:
-- "input_query": A user prompt or question targeting this agent's capabilities.
+- "input_query": A user prompt or question targeting this resource's capabilities.
 - "expected_output": A high-quality ground truth expected response.
 - "expected_context": Key background context or facts expected to be retrieved/referenced.
 
@@ -41,43 +43,49 @@ Do not include any extra markdown formatting outside the JSON array.
 
 async def generate_synthetic_test_cases(
     db: AsyncSession,
-    agent_id: str,
+    *,
+    hub_id: str,
+    target: Any,
     count: int = 10,
-    system_prompt: Optional[str] = None,
-    role: Optional[str] = None,
-    model_id: str = "gemini/gemini-3.5-flash"
-) -> Dict[str, Any]:
-    """Generates synthetic test cases for an Agent and persists them to the database.
+    seed_documents: Optional[List[str]] = None,
+    persist_to_suite_id: Optional[str] = None,
+    model_id: str = "gemini-3.5-flash",
+) -> List[EvalTestCaseCreate]:
+    """Generates synthetic test cases for an agent or workflow target."""
+    if count > 100:
+        raise ValueError("GENERATION_LIMIT_EXCEEDED: Maximum synthetic test case count is 100.")
 
-    Args:
-        db: SQLAlchemy AsyncSession.
-        agent_id: ID of the agent definition.
-        count: Number of synthetic test cases to generate (default 10).
-        system_prompt: Optional prompt override (fetched from DB if omitted).
-        role: Optional role override (fetched from DB if omitted).
-        model_id: LLM model to use for test generation.
+    target_type = getattr(target, "type", None) or getattr(target, "target_type", "agent")
+    target_hub_id = getattr(target, "target_hub_id", None) or getattr(target, "hub_id", None)
+    target_id = getattr(target, "target_id", None) or getattr(target, "id", None)
 
-    Returns:
-        Dict containing suite_id, agent_id, and created test_cases.
-    """
-    agent_name = "Agent"
-    if not system_prompt or not role:
-        stmt = select(AgentDefinition).filter(AgentDefinition.id == agent_id)
-        res = await db.execute(stmt)
-        agent = res.scalar_one_or_none()
-        if not agent:
-            system_prompt = system_prompt or "You are a helpful AI assistant."
-            role = role or "General Assistant"
-            agent_name = f"Agent_{agent_id[:8]}"
-        else:
-            system_prompt = system_prompt or agent.system_prompt
-            role = role or agent.role
-            agent_name = agent.name
+    if not target_id or not target_hub_id:
+        raise ValueError("Invalid target parameter; target_id and target_hub_id are required.")
+
+    # Cross-hub link check
+    resolved_res = await hub_resolver.resolve_linked(
+        db,
+        source_hub_id=hub_id,
+        target_resource_type=target_type,
+        target_resource_id=target_id,
+    )
+    if not resolved_res:
+        raise ValueError(f"HUB_LINK_REQUIRED: Eval hub '{hub_id}' is not linked to target hub '{target_hub_id}'.")
+
+    target_name = getattr(resolved_res, "name", target_id)
+    if target_type == "agent":
+        target_context = f"Role: {getattr(resolved_res, 'role', '')}. System Prompt: {getattr(resolved_res, 'system_prompt', '')}"
+    else:
+        target_context = f"Workflow Slug: {getattr(resolved_res, 'slug', '')}. Topology Nodes: {json.dumps(getattr(resolved_res, 'graph_json', {}))}"
+
+    if seed_documents:
+        target_context += f"\nSeed Documents: {'; '.join(seed_documents)}"
 
     prompt = SYNTHETIC_PROMPT_TEMPLATE.format(
         count=count,
-        role=role,
-        system_prompt=system_prompt
+        target_type=target_type,
+        target_name=target_name,
+        target_context=target_context,
     )
 
     try:
@@ -87,7 +95,7 @@ async def generate_synthetic_test_cases(
             temperature=0.7,
             max_tokens=2048,
         )
-        content = response.choices[0].message.content.strip()
+        content = response.get("content", "").strip()
         if content.startswith("```"):
             lines = content.splitlines()
             if lines[0].startswith("```"):
@@ -100,58 +108,36 @@ async def generate_synthetic_test_cases(
         if not isinstance(raw_cases, list):
             raise ValueError("LLM response did not return a JSON array.")
     except Exception as e:
-        logger.warning(f"Synthetic generation LLM call failed or returned invalid JSON: {e}. Generating fallback test set.")
+        logger.warning(f"Synthetic generation LLM call notice ({e}). Generating fallback test cases.")
         raw_cases = [
             {
-                "input_query": f"Sample evaluation query #{i+1} for {role}",
-                "expected_output": f"Expected response for query #{i+1} matching system prompt guidelines.",
-                "expected_context": f"Relevant context for query #{i+1}."
+                "input_query": f"Sample evaluation query #{i+1} for {target_name}",
+                "expected_output": f"Expected response for query #{i+1}.",
+                "expected_context": f"Relevant context for query #{i+1}.",
             }
             for i in range(min(count, 5))
         ]
 
-    # Look up or create EvalTestSuite for agent
-    suite_stmt = select(EvalTestSuite).filter(EvalTestSuite.agent_id == agent_id)
-    suite_res = await db.execute(suite_stmt)
-    suite = suite_res.scalar_one_or_none()
-
-    if not suite:
-        suite = EvalTestSuite(
-            id=str(uuid.uuid4()),
-            agent_id=agent_id,
-            name=f"{agent_name} Synthetic Test Suite",
-            description=f"Autogenerated synthetic benchmark suite for agent {agent_id}"
-        )
-        db.add(suite)
-        await db.commit()
-        await db.refresh(suite)
-
-    created_cases = []
-    for item in raw_cases:
-        case = EvalTestCase(
-            id=str(uuid.uuid4()),
-            suite_id=suite.id,
+    case_creates = [
+        EvalTestCaseCreate(
             input_query=str(item.get("input_query", "")),
             expected_output=str(item.get("expected_output", "")),
-            expected_context=str(item.get("expected_context", ""))
+            expected_context=str(item.get("expected_context", "")),
         )
-        db.add(case)
-        created_cases.append(case)
+        for item in raw_cases
+        if item.get("input_query")
+    ]
 
-    await db.commit()
+    if persist_to_suite_id:
+        from projects.evalops.src.datasets.manager import add_test_case
+        for c in case_creates:
+            await add_test_case(
+                db,
+                hub_id=hub_id,
+                suite_id=persist_to_suite_id,
+                input_query=c.input_query,
+                expected_output=c.expected_output,
+                expected_context=c.expected_context,
+            )
 
-    return {
-        "status": "success",
-        "suite_id": suite.id,
-        "agent_id": agent_id,
-        "count": len(created_cases),
-        "test_cases": [
-            {
-                "id": c.id,
-                "input_query": c.input_query,
-                "expected_output": c.expected_output,
-                "expected_context": c.expected_context
-            }
-            for c in created_cases
-        ]
-    }
+    return case_creates

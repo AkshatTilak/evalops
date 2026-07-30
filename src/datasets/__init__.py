@@ -13,7 +13,9 @@ from projects.evalops.src.datasets.manager import (
     list_test_cases,
     import_cases_from_csv,
     import_cases_from_json,
+    export_suite,
     export_suite_to_json,
+    suite_health,
 )
 
 __all__ = [
@@ -29,5 +31,7 @@ __all__ = [
     "list_test_cases",
     "import_cases_from_csv",
     "import_cases_from_json",
+    "export_suite",
     "export_suite_to_json",
+    "suite_health",
 ]
