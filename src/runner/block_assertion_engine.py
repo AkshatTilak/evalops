@@ -4,15 +4,12 @@ Supports V6 operators: equals, contains, not_contains, regex, json_path, latency
 occurrence selection (first, last, all), bounded regex matching, and hub-scoped trace isolation.
 """
 
-import asyncio
-import json
 import logging
 import re
 import uuid
 from typing import Any, Dict, List, Optional
-from sqlalchemy import select
 
-from common.models.database import EvalFlowTrace, EvalMetricResult, EvalTestCase
+from common.models.database import EvalMetricResult, EvalTestCase
 from projects.evalops.src.runner.trace_reader import TraceRecord, index_by_node, load_run_traces
 
 logger = logging.getLogger("evalops.block_assertion_engine")
@@ -120,7 +117,7 @@ class BlockAssertionEngine:
                     if passed
                     else f"Latency {actual_lat}ms exceeded threshold {target_lat}ms"
                 )
-            except ValueError as ve:
+            except ValueError:
                 passed = False
                 reason = f"Invalid threshold value for latency_under: {expected_value}"
 

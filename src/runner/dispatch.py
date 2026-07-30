@@ -6,7 +6,6 @@ and normalizes outputs for the RAGAS and DeepEval evaluation pipelines.
 """
 
 import asyncio
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -22,7 +21,6 @@ from common.models.database import (
     EvalTestCase,
     EvalTestSuite,
     Hub,
-    WorkflowDefinition,
 )
 from common.services import hub_resolver
 from projects.evalops.src.metrics.deepeval_runner import run_deepeval_evaluation

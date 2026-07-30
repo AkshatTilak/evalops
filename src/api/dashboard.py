@@ -7,9 +7,9 @@ filtered by hub_id and filter criteria (target_type, target_id, framework, date_
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from common.models.database import EvalMetricResult, EvalRunHistory, EvalTestSuite, HubLink, AgentDefinition, WorkflowDefinition
+from common.models.database import EvalRunHistory, EvalTestSuite
 
 logger = logging.getLogger("evalops.api.dashboard")
 

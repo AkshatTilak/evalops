@@ -1,6 +1,5 @@
 """Unit test for S5-10d: Action Node Mocking Framework."""
 
-import pytest
 from projects.evalops.src.runner.action_mock import ActionNodeMockRegistry
 
 

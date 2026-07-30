@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from projects.evalops.api import router as evalops_router, EvalRunRequest
+from projects.evalops.api import router as evalops_router
+from common.schemas.evalops import EvalRunRequest
 
 
 app = FastAPI()
@@ -17,12 +18,12 @@ client = TestClient(app)
 def test_eval_run_request_schema():
     """Verify EvalRunRequest model accepts framework, metrics, and thresholds."""
     req = EvalRunRequest(
-        agent_id="agent-123",
+        suite_id="suite-123",
         framework="deepeval",
         metrics=["hallucination", "faithfulness"],
         thresholds={"faithfulness": 0.8},
     )
-    assert req.agent_id == "agent-123"
+    assert req.suite_id == "suite-123"
     assert req.framework == "deepeval"
     assert req.metrics == ["hallucination", "faithfulness"]
     assert req.thresholds == {"faithfulness": 0.8}

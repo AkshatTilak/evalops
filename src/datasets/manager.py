@@ -331,7 +331,6 @@ async def update_test_case(
 ) -> Optional[EvalTestCase]:
     """Updates a test case after verifying suite ownership in hub."""
     # Resolve via hub-scoped suite to prevent cross-hub access
-    from sqlalchemy import exists
     suite_subq = select(EvalTestSuite.id).where(
         EvalTestSuite.hub_id == hub_id
     ).scalar_subquery()

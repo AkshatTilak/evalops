@@ -6,7 +6,7 @@ for workflow runs, ensuring tenant isolation by filtering strictly on hub_id.
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from sqlalchemy import select
 
 from common.models.database import EvalFlowTrace

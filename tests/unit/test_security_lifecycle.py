@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from slowapi.errors import RateLimitExceeded
 
 from common.config.settings import Settings, settings
-from common.observability.logger import RequestAuditMiddleware, log_security_event
+from common.observability.logger import RequestAuditMiddleware
 from projects.guardroute.src.agents.coding import run_code_sandbox
 from gateway.api import verify_api_key
 from gateway.main import custom_rate_limit_exceeded_handler

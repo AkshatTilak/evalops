@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from common.schemas import HealthResponse, ErrorResponse, PaginatedResponse, SubAgentResult
 from inference.core.vram_manager import VRAMManager

@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from projects.evalops.scripts.bench_gguf import run_benchmark as run_gguf_bench
 from projects.evalops.scripts.bench_mmlu import run_benchmark as run_mmlu_bench
 from projects.evalops.scripts.bench_models import run_comparative_benchmarks

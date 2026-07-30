@@ -1,6 +1,5 @@
 """Unit test for S5-10c: Intermediate Block Assertion Engine."""
 
-import pytest
 import uuid
 from projects.evalops.src.runner.block_assertion_engine import BlockAssertionEngine
 

@@ -5,9 +5,8 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from common.schemas.model_registry import ModelSpec, ModelRole, ModelMode
 from common.clients.inference import InferenceClient
-from common.clients.litellm import completion_with_fallback, truncate_messages as litellm_truncate
+from common.clients.litellm import truncate_messages as litellm_truncate
 
 
 @pytest.mark.asyncio

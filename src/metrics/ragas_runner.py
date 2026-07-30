@@ -6,9 +6,8 @@ against agent response outputs and retrieved contexts.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
-from common.models.database import EvalTestCase
 from projects.evalops.src.metrics.schemas import RagasCaseResult, RagasEvalResult
 
 logger = logging.getLogger("evalops.metrics.ragas_runner")
@@ -69,7 +68,6 @@ async def run_ragas_evaluation(
 
     try:
         # Attempt to import ragas
-        import ragas
         from datasets import Dataset
 
         data = {

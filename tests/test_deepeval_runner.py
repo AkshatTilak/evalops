@@ -2,7 +2,7 @@
 
 import pytest
 from projects.evalops.src.metrics.deepeval_runner import run_deepeval_evaluation
-from projects.evalops.src.metrics.schemas import DeepEvalResult, DeepEvalCaseResult, DeepEvalMetricScore
+from projects.evalops.src.metrics.schemas import DeepEvalResult, DeepEvalCaseResult
 
 
 @pytest.mark.asyncio

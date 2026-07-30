@@ -1,6 +1,5 @@
 """Unit test for S5-10b: DB Schema Expansion for Flow Tracing (EvalFlowTrace model)."""
 
-import pytest
 import uuid
 from datetime import datetime
 from common.models.database import EvalFlowTrace

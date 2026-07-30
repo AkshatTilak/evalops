@@ -1,7 +1,7 @@
 import os
 import json
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 from deepeval.test_case import LLMTestCase
 from deepeval.metrics import BaseMetric
 from projects.evalops.src.utils.deepeval_wrapper import LiteLLMDeepEvalWrapper
