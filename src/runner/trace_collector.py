@@ -88,10 +88,12 @@ class TraceCollector:
 
         return {
             "id": event_data.get("id", str(uuid.uuid4())),
+            "hub_id": event_data.get("hub_id"),
             "run_id": event_data.get("run_id"),
             "workflow_id": event_data.get("workflow_id", "default_flow"),
             "node_id": event_data.get("node_id", "unknown_node"),
             "node_type": event_data.get("node_type", "action"),
+            "sequence": event_data.get("sequence"),
             "input_state": event_data.get("input_state") or event_data.get("inputs") or {},
             "output_state": event_data.get("output_state") or event_data.get("outputs") or {},
             "latency_ms": float(event_data.get("latency_ms") or event_data.get("duration_ms") or 0.0),
