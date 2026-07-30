@@ -330,7 +330,15 @@ async def update_test_case(
     expected_value: Optional[str] = None,
 ) -> Optional[EvalTestCase]:
     """Updates a test case after verifying suite ownership in hub."""
-    stmt = select(EvalTestCase).where(EvalTestCase.id == case_id)
+    # Resolve via hub-scoped suite to prevent cross-hub access
+    from sqlalchemy import exists
+    suite_subq = select(EvalTestSuite.id).where(
+        EvalTestSuite.hub_id == hub_id
+    ).scalar_subquery()
+    stmt = select(EvalTestCase).where(
+        EvalTestCase.id == case_id,
+        EvalTestCase.suite_id.in_(suite_subq),
+    )
     res = await db.execute(stmt)
     case = res.scalar_one_or_none()
     if not case:
@@ -364,7 +372,14 @@ async def update_test_case(
 
 async def delete_test_case(db, *, hub_id: str, case_id: str) -> bool:
     """Deletes a test case after verifying suite ownership in hub."""
-    stmt = select(EvalTestCase).where(EvalTestCase.id == case_id)
+    # Resolve via hub-scoped suite to prevent cross-hub access
+    suite_subq = select(EvalTestSuite.id).where(
+        EvalTestSuite.hub_id == hub_id
+    ).scalar_subquery()
+    stmt = select(EvalTestCase).where(
+        EvalTestCase.id == case_id,
+        EvalTestCase.suite_id.in_(suite_subq),
+    )
     res = await db.execute(stmt)
     case = res.scalar_one_or_none()
     if not case:

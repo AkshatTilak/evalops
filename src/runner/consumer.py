@@ -79,7 +79,12 @@ async def process_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any]:
     async with SessionLocal() as db:
         suite = None
         if suite_id:
-            suite_res = await db.execute(select(EvalTestSuite).where(EvalTestSuite.id == suite_id))
+            suite_res = await db.execute(
+                select(EvalTestSuite).where(
+                    EvalTestSuite.id == suite_id,
+                    EvalTestSuite.hub_id == hub_id,
+                )
+            )
             suite = suite_res.scalar_one_or_none()
 
         if not suite:
@@ -98,7 +103,12 @@ async def process_eval_run(event_payload: Dict[str, Any]) -> Dict[str, Any]:
 
         if not test_cases:
             logger.warning(f"No test cases found for suite {suite.id}. Completing run with 0 cases.")
-            run_res = await db.execute(select(EvalRunHistory).where(EvalRunHistory.id == run_id))
+            run_res = await db.execute(
+                select(EvalRunHistory).where(
+                    EvalRunHistory.id == run_id,
+                    EvalRunHistory.hub_id == eval_hub_id,
+                )
+            )
             history_record = run_res.scalar_one_or_none()
             if history_record:
                 history_record.run_status = "completed"

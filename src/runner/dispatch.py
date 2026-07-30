@@ -275,8 +275,11 @@ async def dispatch_run(
     target = await resolve_target(session, eval_hub_id=eval_hub_id, suite=suite)
     start_t = time.time()
 
-    # Ensure run history record exists and has running status
-    history_stmt = select(EvalRunHistory).where(EvalRunHistory.id == run_id)
+    # Ensure run history record exists and has running status — hub-scoped to prevent cross-hub access
+    history_stmt = select(EvalRunHistory).where(
+        EvalRunHistory.id == run_id,
+        EvalRunHistory.hub_id == eval_hub_id,
+    )
     history_res = await session.execute(history_stmt)
     history_record = history_res.scalar_one_or_none()
 
